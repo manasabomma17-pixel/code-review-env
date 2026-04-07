@@ -1,0 +1,100 @@
+name: code-review-env
+version: "1.0.0"
+description: >
+  An OpenEnv environment where an AI agent acts as a code reviewer.
+  The agent inspects realistic code diffs (Python, JavaScript) and must
+  identify security vulnerabilities, bugs, and performance issues with
+  correct severity and category classification.
+
+tags:
+  - openenv
+  - code-review
+  - security
+  - reinforcement-learning
+
+author: Lakehouse Team
+license: MIT
+
+environment:
+  class: CodeReviewEnv
+  module: env.environment
+  entrypoint: app.py
+
+api:
+  reset: POST /reset
+  step: POST /step
+  state: GET /state
+  health: GET /health
+
+tasks:
+  - id: easy
+    description: >
+      Review a Python user service with 3 obvious issues: SQL injection,
+      broken MD5 password hashing, and a missing import causing NameError.
+    difficulty: easy
+    max_steps: 40
+    score_range: [0.0, 1.0]
+    ground_truth_issues: 3
+
+  - id: medium
+    description: >
+      Review an Express.js REST API with 5 issues spanning authentication
+      bypass, SQL injection, plaintext passwords, silent error handling,
+      and a hardcoded JWT secret.
+    difficulty: medium
+    max_steps: 60
+    score_range: [0.0, 1.0]
+    ground_truth_issues: 5
+
+  - id: hard
+    description: >
+      Review Python concurrency utilities with 5 subtle issues: TOCTOU
+      race condition, missing locks on shared state, lambda closure bug,
+      thread-unsafe list append, and an RCE via pickle.loads.
+    difficulty: hard
+    max_steps: 80
+    score_range: [0.0, 1.0]
+    ground_truth_issues: 5
+
+observation_space:
+  type: object
+  fields:
+    diff_lines: "list[CodeLine] — full diff with line numbers"
+    file_name: "str — file being reviewed"
+    language: "str — programming language"
+    current_line_index: "int — current focus line"
+    lines_reviewed: "int — lines processed"
+    total_lines: "int — total lines in diff"
+    issues_flagged: "list[FlaggedIssue] — issues found so far"
+    step_number: "int"
+    task: "str"
+    done: "bool"
+
+action_space:
+  type: object
+  fields:
+    action_type: "flag_issue | approve_line | submit_review"
+    line_number: "int (for flag_issue)"
+    severity: "critical | high | medium | low | info"
+    category: "security | bug | performance | style | logic | documentation"
+    explanation: "str (for flag_issue)"
+    approved_line: "int (for approve_line)"
+
+reward:
+  type: dense
+  range: [-1.0, 1.0]
+  components:
+    true_positive: "+0.40 for correctly flagging a real issue"
+    severity_bonus: "+0.15 for exact severity match, +0.075 for off-by-one"
+    category_bonus: "+0.10 for exact category match"
+    false_positive: "-0.20 for flagging a clean line"
+    approve_clean: "+0.02 for approving an actually clean line"
+
+baseline:
+  script: inference.py
+  model: meta-llama/Llama-3.3-70B-Instruct
+  api: HuggingFace Inference API (OpenAI-compatible)
+  required_env:
+    - API_BASE_URL
+    - MODEL_NAME
+    - HF_TOKEN
