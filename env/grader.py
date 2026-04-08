@@ -126,10 +126,10 @@ def grade_episode(
     Final episode score in [0.0, 1.0].
 
     Precision × Recall F1-like score:
-      - Start from 1.0
-      - Subtract FN penalty for each missed real issue
-      - Subtract FP penalty for each spurious flag
-      - Divide by number of ground truth issues to normalize
+    - Start from 1.0
+    - Subtract FN penalty for each missed real issue
+    - Subtract FP penalty for each spurious flag
+    - Divide by number of ground truth issues to normalize
     """
     if not ground_truth:
         return 1.0 if not flagged_issues else 0.5
@@ -147,4 +147,4 @@ def grade_episode(
     fn_penalty = (len(false_negatives) * _FN_PENALTY_PER_MISS) / n
 
     raw = tp_score - fp_penalty - fn_penalty
-    return round(max(0.0, min(1.0, raw)), 4)
+    return round(max(0.01, min(0.99, raw)), 4)
