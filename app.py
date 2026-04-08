@@ -94,8 +94,10 @@ def list_tasks() -> dict:
 
 
 @app.post("/reset", response_model=Observation)
-def reset(req: ResetRequest) -> Observation:
+def reset(req: ResetRequest = None) -> Observation:
     """Reset the environment for a given task and return initial observation."""
+    if req is None:
+        req = ResetRequest()
     if req.task not in ("easy", "medium", "hard"):
         raise HTTPException(status_code=400, detail=f"Unknown task: {req.task}")
     env = CodeReviewEnv(task=req.task)
