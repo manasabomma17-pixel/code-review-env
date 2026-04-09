@@ -21,12 +21,13 @@ tasks = ["easy", "medium", "hard"]
 results = {}
 
 # Always print [START] first
-print(json.dumps({
-    "type": "[START]",
-    "model": MODEL_NAME,
-    "api_base": API_BASE_URL,
-    "tasks": tasks,
-}), flush=True)
+# print(json.dumps({
+#     "type": "[START]",
+#     "model": MODEL_NAME,
+#     "api_base": API_BASE_URL,
+#     "tasks": tasks,
+# }), flush=True)
+print(f"[START] model={MODEL_NAME} tasks={tasks}", flush=True)
 
 try:
     from openai import OpenAI
@@ -100,13 +101,14 @@ Focus on SECURITY first, then BUGS. Submit when done."""
 
             action = parse_action(raw_response)
 
-            print(json.dumps({
-                "type": "[STEP]",
-                "task": task,
-                "step": step,
-                "action": action.model_dump(),
-                "raw_llm": raw_response[:200],
-            }), flush=True)
+            # print(json.dumps({
+            #     "type": "[STEP]",
+            #     "task": task,
+            #     "step": step,
+            #     "action": action.model_dump(),
+            #     "raw_llm": raw_response[:200],
+            # }), flush=True)
+            print(f"[STEP] task={task} step={step} action={action.action_type}", flush=True)
 
             obs, reward, done, info = env.step(action)
             obs_dict = obs.model_dump()
@@ -156,8 +158,10 @@ except Exception as e:
         results[task] = 0.0
 
 # Always print [END]
-print(json.dumps({
-    "type": "[END]",
-    "results": results,
-    "average_score": round(sum(results.values()) / len(results), 4) if results else 0.0,
-}), flush=True)
+# print(json.dumps({
+#     "type": "[END]",
+#     "results": results,
+#     "average_score": round(sum(results.values()) / len(results), 4) if results else 0.0,
+# }), flush=True)
+for task, score in results.items():
+    print(f"[END] task={task} score={score} steps=1", flush=True)
