@@ -81,15 +81,44 @@ def health() -> dict:
     return {"status": "ok", "environment": "CodeReviewEnv", "version": "1.0.0"}
 
 
+# @app.get("/tasks")
+# def list_tasks() -> dict:
+#     return {
+#         "tasks": ["easy", "medium", "hard"],
+#         "description": {
+#             "easy": "Python service with obvious SQL injection and broken crypto",
+#             "medium": "Express.js API with auth bypass and hardcoded secrets",
+#             "hard": "Concurrency utilities with subtle race conditions and RCE",
+#         },
+#     }
 @app.get("/tasks")
 def list_tasks() -> dict:
     return {
-        "tasks": ["easy", "medium", "hard"],
-        "description": {
-            "easy": "Python service with obvious SQL injection and broken crypto",
-            "medium": "Express.js API with auth bypass and hardcoded secrets",
-            "hard": "Concurrency utilities with subtle race conditions and RCE",
-        },
+        "tasks": [
+            {"id": "easy", "grader": "/grade/easy"},
+            {"id": "medium", "grader": "/grade/medium"},
+            {"id": "hard", "grader": "/grade/hard"},
+        ]
+    }
+    
+@app.post("/grade/{task_id}")
+def grade_task(task_id: str, session_id: str = "default") -> dict:
+    if task_id not in ("easy", "medium", "hard"):
+        raise HTTPException(status_code=400, detail=f"Unknown task: {task_id}")
+    if session_id not in _envs:
+        env = CodeReviewEnv(task=task_id)
+        env.reset()
+        _envs[session_id] = env
+    env = _envs[session_id]
+    from env.grader import grade_episode
+    from env.models import FlaggedIssue
+    s = env.state()
+    flagged = [FlaggedIssue(**f) for f in s["flagged_issues"]]
+    score = grade_episode(flagged, env._ground_truth)
+    return {
+        "task": task_id,
+        "score": float(score),
+        "done": s["done"],
     }
 
 
