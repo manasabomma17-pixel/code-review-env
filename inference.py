@@ -142,7 +142,7 @@ Focus on SECURITY first, then BUGS. Submit when done."""
                 "action": {"action_type": "submit_review"},
                 "raw_llm": f"Error: {e}",
             }), flush=True)
-            score = 0.0
+            score = 0.01
         results[task] = score
 
 except Exception as e:
@@ -155,7 +155,7 @@ except Exception as e:
             "action": {"action_type": "submit_review"},
             "raw_llm": f"Setup error: {e}",
         }), flush=True)
-        results[task] = 0.0
+        results[task] = 0.01
 
 # Always print [END]
 # print(json.dumps({
