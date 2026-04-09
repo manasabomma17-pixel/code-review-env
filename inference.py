@@ -3,165 +3,170 @@ inference.py — Baseline inference script for CodeReviewEnv.
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
+import json
 import time
+from typing import Optional
 
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api-inference.huggingface.co/v1")
-MODEL_NAME = os.environ.get("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
-
-if not HF_TOKEN:
-    print("[WARN] HF_TOKEN not set", file=sys.stderr)
+from openai import OpenAI
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-tasks = ["easy", "medium", "hard"]
-results = {}
+from env import (
+    CodeReviewEnv, Action, ActionType,
+    IssueSeverity, IssueCategory,
+)
 
-# Always print [START] first
-# print(json.dumps({
-#     "type": "[START]",
-#     "model": MODEL_NAME,
-#     "api_base": API_BASE_URL,
-#     "tasks": tasks,
-# }), flush=True)
-print(f"[START] model={MODEL_NAME} tasks={tasks}", flush=True)
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
+HF_TOKEN = os.getenv("HF_TOKEN", "")
+BENCHMARK = "code-review-env"
+MAX_STEPS = 30
 
-try:
-    from openai import OpenAI
-    from env import CodeReviewEnv, Action, ActionType
+client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
-    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN or "dummy")
+SYSTEM_PROMPT = """You are an expert code reviewer specializing in security vulnerabilities and bugs.
 
-    SYSTEM_PROMPT = """You are an expert code reviewer specializing in security vulnerabilities.
-Output ONLY valid JSON actions. No prose, no markdown.
-For flagging: {"action_type": "flag_issue", "line_number": <int>, "severity": "<critical|high|medium|low|info>", "category": "<security|bug|performance|style|logic|documentation>", "explanation": "<text>"}
-For approving: {"action_type": "approve_line", "approved_line": <int>}
-For finishing: {"action_type": "submit_review"}
-Focus on SECURITY first, then BUGS. Submit when done."""
+Output a JSON action with EXACTLY this schema:
 
-    def build_user_message(obs_dict):
-        lines = obs_dict["diff_lines"]
-        code_block = "\n".join(f"{l['line_number']:>3}: {l['content']}" for l in lines)
-        flagged = obs_dict.get("issues_flagged", [])
-        flagged_summary = (
-            "\n".join(f"  Line {f['line_number']}: [{f['severity']}] {f['explanation']}" for f in flagged)
-            if flagged else "  (none yet)"
-        )
-        return (
-            f"File: {obs_dict['file_name']} ({obs_dict['language']})\n"
-            f"Step: {obs_dict['step_number']} | Lines reviewed: {obs_dict['lines_reviewed']}/{obs_dict['total_lines']}\n\n"
-            f"CODE DIFF:\n{code_block}\n\n"
-            f"Issues flagged so far:\n{flagged_summary}\n\n"
-            "What is your next action? Output JSON only."
-        )
+For flagging an issue:
+{"action_type":"flag_issue","line_number":<int>,"severity":"<critical|high|medium|low|info>","category":"<security|bug|performance|style|logic|documentation>","explanation":"<clear explanation>"}
 
-    def call_llm(messages):
-        response = client.chat.completions.create(
-            model=MODEL_NAME, messages=messages, max_tokens=300, temperature=0.1,
-        )
-        return response.choices[0].message.content.strip()
+For approving a clean line:
+{"action_type":"approve_line","approved_line":<int>}
 
-    def parse_action(raw):
-        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        try:
-            return Action(**json.loads(raw))
-        except Exception:
-            return Action(action_type=ActionType.SUBMIT_REVIEW)
+For finishing the review:
+{"action_type":"submit_review"}
 
-    def run_task(task):
-        env = CodeReviewEnv(task=task)
-        obs = env.reset()
-        obs_dict = obs.model_dump()
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_user_message(obs_dict)},
-        ]
-        final_score = 0.0
-        step = 0
-        max_steps = 40
+Output ONLY valid JSON. No prose, no markdown, no backticks.
+Focus on SECURITY issues first, then BUG issues.
+When all critical issues are flagged, submit the review."""
 
-        while step < max_steps:
-            step += 1
+
+def build_user_message(obs_dict: dict) -> str:
+    lines = obs_dict["diff_lines"]
+    code_block = "\n".join(
+        f"{l['line_number']:>3}: {l['content']}" for l in lines
+    )
+    flagged = obs_dict.get("issues_flagged", [])
+    flagged_summary = (
+        "\n".join(f"  Line {f['line_number']}: [{f['severity']}] {f['explanation']}" for f in flagged)
+        if flagged else "  (none yet)"
+    )
+    return (
+        f"File: {obs_dict['file_name']} ({obs_dict['language']})\n"
+        f"CODE DIFF:\n{code_block}\n\n"
+        f"Issues flagged so far:\n{flagged_summary}\n\n"
+        "Output your next action as JSON only."
+    )
+
+
+def call_llm(messages: list[dict]) -> str:
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=messages,
+        max_tokens=300,
+        temperature=0.1,
+    )
+    return response.choices[0].message.content.strip()
+
+
+def parse_action(raw: str) -> Action:
+    raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+    try:
+        data = json.loads(raw)
+        return Action(**data)
+    except Exception:
+        return Action(action_type=ActionType.SUBMIT_REVIEW)
+
+
+def run_task(task: str) -> None:
+    env = CodeReviewEnv(task=task)
+    obs = env.reset()
+    obs_dict = obs.model_dump()
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": build_user_message(obs_dict)},
+    ]
+
+    rewards: list[float] = []
+    steps_taken = 0
+    score = 0.01
+    success = False
+
+    print(f"[START] task={task} env={BENCHMARK} model={MODEL_NAME}", flush=True)
+
+    try:
+        for step in range(1, MAX_STEPS + 1):
+            error_msg = None
             try:
                 raw_response = call_llm(messages)
             except Exception as e:
-                print(f"[WARN] LLM call failed at step {step}: {e}", file=sys.stderr)
-                # Emit a fallback STEP so validator sees output
-                print(json.dumps({
-                    "type": "[STEP]",
-                    "task": task,
-                    "step": step,
-                    "action": {"action_type": "submit_review"},
-                    "raw_llm": f"LLM error: {e}",
-                }), flush=True)
-                break
+                error_msg = str(e)[:50]
+                raw_response = '{"action_type":"submit_review"}'
 
             action = parse_action(raw_response)
+            action_str = action.action_type.value
 
-            # print(json.dumps({
-            #     "type": "[STEP]",
-            #     "task": task,
-            #     "step": step,
-            #     "action": action.model_dump(),
-            #     "raw_llm": raw_response[:200],
-            # }), flush=True)
-            print(f"[STEP] task={task} step={step} action={action.action_type}", flush=True)
+            try:
+                obs, reward, done, info = env.step(action)
+                obs_dict = obs.model_dump()
+            except Exception as e:
+                error_msg = str(e)[:50]
+                reward = 0.0
+                done = True
+                info = {"final_score": 0.01}
 
-            obs, reward, done, info = env.step(action)
-            obs_dict = obs.model_dump()
+            rewards.append(float(reward))
+            steps_taken = step
 
-            messages.append({"role": "assistant", "content": raw_response})
+            done_val = str(done).lower()
+            error_val = error_msg if error_msg else "null"
+            print(
+                f"[STEP] step={step} action={action_str} reward={float(reward):.2f} done={done_val} error={error_val}",
+                flush=True,
+            )
+
             if not done:
+                messages.append({"role": "assistant", "content": raw_response})
                 messages.append({
                     "role": "user",
-                    "content": f"Step result: reward={reward:.3f}\n" + build_user_message(obs_dict),
+                    "content": f"reward={reward:.3f}\n" + build_user_message(obs_dict),
                 })
+
             if done:
-                final_score = info.get("final_score") or 0.0
+                raw_score = info.get("final_score") or 0.01
+                score = max(0.01, min(0.99, float(raw_score)))
+                success = score >= 0.3
                 break
 
             time.sleep(0.3)
 
-        return final_score
+    except Exception as e:
+        print(f"[DEBUG] Task {task} exception: {e}", file=sys.stderr, flush=True)
+        score = 0.01
 
-    for task in tasks:
-        print(f"\n{'='*50}", file=sys.stderr)
-        print(f"Running task: {task}", file=sys.stderr)
+    finally:
+        rewards_str = ",".join(f"{r:.2f}" for r in rewards) if rewards else "0.01"
+        print(
+            f"[END] success={str(success).lower()} steps={steps_taken} score={score:.3f} rewards={rewards_str}",
+            flush=True,
+        )
+
+
+def main() -> None:
+    for task in ["easy", "medium", "hard"]:
+        print(f"\n=== Running task: {task} ===", file=sys.stderr, flush=True)
         try:
-            score = run_task(task)
+            run_task(task)
         except Exception as e:
-            print(f"[ERROR] Task {task} failed: {e}", file=sys.stderr)
-            # Emit fallback STEP so validator sees at least one step
-            print(json.dumps({
-                "type": "[STEP]",
-                "task": task,
-                "step": 1,
-                "action": {"action_type": "submit_review"},
-                "raw_llm": f"Error: {e}",
-            }), flush=True)
-            score = 0.01
-        results[task] = score
+            print(f"[DEBUG] Fatal: {e}", file=sys.stderr, flush=True)
+            print(f"[START] task={task} env={BENCHMARK} model={MODEL_NAME}", flush=True)
+            print(f"[STEP] step=1 action=submit_review reward=0.01 done=true error=fatal", flush=True)
+            print(f"[END] success=false steps=1 score=0.010 rewards=0.01", flush=True)
 
-except Exception as e:
-    print(f"[FATAL] Setup failed: {e}", file=sys.stderr)
-    for task in tasks:
-        print(json.dumps({
-            "type": "[STEP]",
-            "task": task,
-            "step": 1,
-            "action": {"action_type": "submit_review"},
-            "raw_llm": f"Setup error: {e}",
-        }), flush=True)
-        results[task] = 0.01
 
-# Always print [END]
-# print(json.dumps({
-#     "type": "[END]",
-#     "results": results,
-#     "average_score": round(sum(results.values()) / len(results), 4) if results else 0.0,
-# }), flush=True)
-for task, score in results.items():
-    print(f"[END] task={task} score={score} steps=1", flush=True)
+if __name__ == "__main__":
+    main()
